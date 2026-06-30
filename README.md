@@ -1,2 +1,1 @@
-# ai-project-memory-loop
-A lightweight workflow for using live project documentation as memory in AI-assisted development.
+Templates and workflow notes for keeping AI-assisted development bounded, reviewable, and human-led through task briefs, implementation contracts, final review, and operational project memory.
