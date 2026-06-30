@@ -1,0 +1,215 @@
+# CP-0012b — Prevent Lenient Placeholder Records From Being Restored
+
+## Goal
+
+Patch a rollback/snapshot edge case introduced by lenient loading for messages.
+
+Malformed message JSON may be loaded into runtime as a placeholder object so the app can skip it safely. That placeholder must never be written back to disk during snapshot restore.
+
+This is a hotfix. Keep the change narrow.
+
+## Current Issue
+
+`store.js` now has a lenient JSON loader:
+
+```js
+function listJsonLenient(dirPath) {
+  if (!fs.existsSync(dirPath)) return [];
+  return fs.readdirSync(dirPath)
+    .filter((name) => name.endsWith(".json"))
+    .map((name) => {
+      try {
+        return readJson(path.join(dirPath, name));
+      } catch (error) {
+        return {
+          __malformedJson: true,
+          __fileName: name
+        };
+      }
+    });
+}
+```
+
+`loadCampaign()` currently uses it for:
+
+```js
+units: listJsonLenient(path.join(campaignDir, "units")),
+messages: listJsonLenient(path.join(campaignDir, "messages")),
+```
+
+The risk is in snapshot/restore behavior:
+
+```text
+malformed message JSON
+→ listJsonLentext
+malient returns placeholder object
+→ createSnapshot stores placeholder in snapshot campaign.messages
+→ restoreSnapshot calls writeCollection("messages", campaign.messages)
+→ writeCollection assumes record.id exists
+→ possible messages/undefined.json write
+```
+
+This must be prevented.
+
+## Critical Inspection Rule
+
+Before implementing, inspect the actual current code.
+
+Do not assume:
+
+* `writeCollection()` is still shaped exactly as described here
+* `restoreSnapshot()` writes all loaded collections
+* lenient placeholder fields are exactly `__malformedJson` and `__fileName`
+* message records are the only lenient records that can reach restore
+* a generic write fix is safe for all collections
+
+Patch against the actual implementation and report any correction.
+
+## Required Behavior
+
+Malformed lenient placeholder records may exist in loaded runtime campaign data for validation/skipping.
+
+They must not be written back to disk during restore or any collection rewrite.
+
+A malformed placeholder record is any record that is clearly not a persistable campaign record, especially:
+
+```text
+record.__malformedJson === true
+```
+
+or a record missing a valid non-empty string `id`.
+
+## Scope
+
+In scope:
+
+* inspect `store.js`
+* inspect `listJsonLenient`
+* inspect `loadCampaign`
+* inspect `createSnapshot`
+* inspect `restoreSnapshot`
+* inspect `writeCollection`
+* prevent malformed lenient placeholders from being written as JSON records
+* prevent `undefined.json` from being created during restore
+* preserve existing rollback behavior for valid campaign records
+* add a narrow comment if useful
+* update `TECHNICAL_DEBT.md` only if a directly relevant limitation remains
+
+Out of scope:
+
+* redesign snapshot storage
+* redesign rollback
+* redesign lenient loading
+* add database/storage abstraction
+* change message side-channel behavior
+* change message validation rules
+* change campaignPacket shape
+* change frontend behavior
+* change LLM prompt behavior
+* migrate message files
+* create/delete/edit message seed data
+* fix unrelated actor/unit restore behavior
+* broad refactors
+
+## Preferred Fix Direction
+
+Prefer a narrow helper that prevents non-persistable placeholder records from being written.
+
+Possible safe direction:
+
+```js
+function isPersistableRecord(record) {
+  return record &&
+    record.__malformedJson !== true &&
+    typeof record.id === "string" &&
+    record.id.trim();
+}
+```
+
+Then apply it only where safe.
+
+Do not silently make all critical collections lenient unless that is clearly the smallest safe fix.
+
+Hard-fail behavior for core non-lenient campaign files should remain intact unless the current code already behaves otherwise.
+
+## Important Design Boundary
+
+Lenient loading is allowed for optional/side-channel style collections like messages.
+
+Lenient placeholder records are runtime diagnostic objects.
+
+They are not campaign records.
+
+They must not cross the persistence write boundary.
+
+Industry rule for this patch:
+
+```text
+Runtime placeholders may be read.
+Runtime placeholders may be skipped.
+Runtime placeholders must not be written.
+```
+
+## Acceptance Criteria
+
+The task is complete when:
+
+* actual `store.js` write/restore path was inspected
+* malformed lenient placeholder records cannot be written as `undefined.json`
+* restore still writes valid message records normally
+* restore still works for valid snapshots
+* malformed message JSON does not crash message side-channel availability
+* malformed message JSON does not crash rollback
+* message side-channel behavior remains binary only
+* message contents are still not exposed in Prose
+* messages are still not inserted into `campaignPacket.context`
+* LLM prompt behavior is unchanged
+* frontend `{ playerAction }` contract is unchanged
+* Chronicle behavior is unchanged
+* time advancement behavior is unchanged
+* no unrelated storage redesign was performed
+* no message JSON files are created, edited, deleted, or migrated by implementation
+* no legacy paths are removed
+
+## Manual Verification
+
+After implementation:
+
+1. Back up the current valid message JSON manually.
+2. Run `npm start`.
+3. Confirm normal app load still works.
+4. Confirm `Mailbox: Mail available.` appears with the valid message restored.
+5. Temporarily break the message JSON syntax so it is malformed JSON.
+6. Reload or submit a normal action as needed to force campaign loading.
+7. Confirm the app does not crash.
+8. Confirm terminal logs show the malformed message was skipped.
+9. Confirm Mailbox shows unavailable or otherwise safe binary state.
+10. Trigger snapshot/rollback flow.
+11. Confirm rollback does not create `campaign/messages/undefined.json`.
+12. Confirm rollback does not crash because of the malformed placeholder.
+13. Restore the valid message JSON manually.
+14. Confirm `Mailbox: Mail available.` returns.
+15. Confirm scene, choices, Chronicle, and rollback still work normally.
+
+## Expected Codex Report
+
+Report:
+
+* files inspected
+* files changed
+* exact rollback/write risk found
+* whether `writeCollection()` was changed
+* whether restore-specific filtering was added instead
+* how malformed lenient placeholders are detected
+* how `undefined.json` creation is prevented
+* whether valid messages still restore normally
+* whether hard-fail behavior for non-lenient collections was preserved
+* whether message side-channel behavior changed
+* whether frontend behavior changed
+* whether LLM prompt behavior changed
+* whether Chronicle/time behavior changed
+* whether `TECHNICAL_DEBT.md` was updated
+* how manual verification should be performed
+
+```
+```

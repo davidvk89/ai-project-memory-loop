@@ -1,0 +1,334 @@
+# CP-0011 — Thread Context Controller v0
+
+## Goal
+
+Implement a minimal server-side Thread Context Controller v0 for the new LLM game-loop path.
+
+This task establishes the correct architectural seam for thread validation and selection, while keeping the implementation intentionally small.
+
+Core responsibility rule:
+
+```text
+Controllers select context.
+Context helpers format context.
+campaignPacketBuilder assembles context.
+```
+
+`campaignPacketBuilder` must not become the owner of long-term thread retrieval policy.
+
+## Current Context
+
+Existing thread records live under:
+
+```text
+campaign/threads/*.json
+```
+
+Known example shape:
+
+```json
+{
+  "id": "thread_al_sahir_rising",
+  "title": "The Rise Of al-Sahir",
+  "status": "open",
+  "importance": "moderate",
+  "summary": "Short durable story-pressure summary.",
+  "involvedCharacters": ["mela", "player_one"],
+  "stakes": [
+    "one compact stake",
+    "another compact stake"
+  ]
+}
+```
+
+Use this example to infer structure only.
+
+Do not hardcode this example, its ID, its title, or its content into application logic.
+
+## Critical Inspection Rule
+
+Before implementing, inspect the actual code and actual loaded thread records.
+
+Do not assume:
+
+* the thread fields are exactly as described here
+* `campaign.threads` is already the correct source
+* thread loading happens in the file you expect
+* `campaignPacketBuilder` has the same shape as earlier tasks
+
+If actual loaded fields or code paths differ, patch against the actual implementation and report the correction.
+
+## Required Architecture
+
+Create a narrow Thread Context Controller v0.
+
+Preferred file name:
+
+```text
+src/threadContextController.js
+```
+
+Use a different name only if existing project conventions clearly suggest a better one. Report the reason if you choose a different name.
+
+The controller is an application-service boundary. For v0 it should mostly behave as a validator and simple selector.
+
+## Required Responsibility Split
+
+### Thread records
+
+Thread records must:
+
+* remain in `campaign/threads/*.json`
+* keep their existing stored shape
+* not be migrated
+* not be rewritten
+* not be created
+* not be deleted
+
+### Thread Context Controller v0
+
+The controller must:
+
+* receive current thread records from the existing campaign-loading path, or load them through the existing store mechanism if that is the current convention
+* validate minimal usable Thread v0 records
+* skip malformed records safely
+* select only open records
+* cap selected records
+* return clean selected thread candidates
+* log selected and skipped counts
+
+### Thread context formatter
+
+The formatter may live in the same file or in a separate helper if cleaner.
+
+It must:
+
+* format selected threads into compact LLM-facing context text
+* avoid context bloat
+* not own long-term thread retrieval policy
+* not mutate thread records
+
+### campaignPacketBuilder
+
+`campaignPacketBuilder` must:
+
+* call the new controller/helper path
+* insert prepared Open Threads context into the server-built campaignPacket or prompt context
+* not personally perform long-term thread selection policy
+* not become a thread engine
+
+## Minimal Thread v0 Validation
+
+A usable Thread v0 record must have:
+
+```text
+id: string
+title: string
+status: string
+importance: string
+summary: string
+involvedCharacters: array
+stakes: array
+```
+
+For v0:
+
+* do not enforce an enum for `importance`
+* do not validate individual `stakes` items beyond requiring `stakes` to be an array
+* do not validate individual `involvedCharacters` items beyond requiring `involvedCharacters` to be an array
+* malformed records must be skipped
+* malformed records must be counted/logged
+* malformed records must not crash the game loop
+
+## Selection Policy v0
+
+The v0 selection policy is intentionally simple:
+
+```text
+all loaded thread records
+→ valid Thread v0 records
+→ status === "open"
+→ capped selected records
+→ compact LLM-facing context
+```
+
+Use a conservative cap:
+
+```text
+maximum 3 open threads
+```
+
+Do not implement advanced relevance scoring.
+
+Do not implement actor-scoped indexes.
+
+Do not implement read models.
+
+Do not implement thread ownership.
+
+Do not implement thread progression.
+
+Do not implement thread resolution.
+
+Do not implement thread creation or mutation.
+
+## LLM-Facing Context Format
+
+Add a compact context section similar to:
+
+```text
+Open threads:
+- The Rise Of al-Sahir [moderate]: Short durable story-pressure summary.
+```
+
+Rules:
+
+* one line per thread preferred
+* two lines maximum per thread if needed
+* include `title`, `importance`, and `summary`
+* optionally include at most 1–2 compact stakes only if this is easy and does not bloat the prompt
+* do not include full history
+* do not include full involved character lists unless existing validation requires it
+* do not include raw JSON
+* do not include malformed records
+
+If there are no usable open threads, omit the section or include a compact empty-state only if that matches existing context-section conventions.
+
+## Preserve Existing Contracts
+
+Preserve the frontend request contract:
+
+```json
+{
+  "playerAction": "string"
+}
+```
+
+Do not reintroduce frontend-built `campaignPacket`.
+
+Preserve:
+
+* existing LLM generation route
+* existing validation behavior
+* existing successful commit behavior
+* existing failed-validation no-commit behavior
+* existing Chronicle behavior
+* existing rollback behavior
+* existing campaign data files
+* existing legacy paths
+
+## In Scope
+
+* inspect current campaign/thread loading path
+* inspect actual loaded thread field names
+* add a minimal Thread Context Controller v0
+* add or reuse compact thread context formatting
+* wire compact Open Threads context into the server-built LLM context path
+* cap selected open thread count
+* skip malformed records safely
+* log selected/skipped thread counts
+* update `TECHNICAL_DEBT.md` only for directly relevant deferred thread architecture
+
+## Out of Scope
+
+Do not implement:
+
+* thread storage redesign
+* schema migration
+* actor-scoped thread indexes
+* read models
+* CRUD
+* thread creation
+* thread mutation
+* thread progression
+* thread resolution
+* thread ownership model
+* actor-thread relationship graph
+* unit-thread references
+* location-thread references
+* legacy sample data cleanup
+* legacy path removal
+* unrelated refactors
+* frontend request contract changes
+* prompt redesign beyond inserting compact Open Threads context
+
+## Transitional Architecture Rule
+
+This task may add a minimal controller/application-service layer, but it must have narrow responsibility.
+
+Do not build a full parallel thread system.
+
+Document directly relevant future thread architecture debt in `TECHNICAL_DEBT.md`.
+
+Future debt may include:
+
+```text
+- actor-scoped thread indexes
+- reference indexes by actor/unit/location/module entity
+- richer canonical Thread schema
+- controlled schema migration during CRUD/data-entry pass
+- thread progression/resolution policy
+- selection based on active actor, location, current scene, and recent events
+```
+
+Do not implement those future items in this task.
+
+## Acceptance Criteria
+
+The task is complete when:
+
+* actual thread loading path was inspected
+* actual loaded thread field names were inspected
+* existing `campaign/threads/*.json` records are read without changing their stored shape
+* malformed thread records are skipped safely
+* skipped malformed records are counted/logged
+* only valid open threads are selected
+* selected thread count is capped at 3 unless a clearly justified smaller cap is used
+* compact Open Threads context appears in the server-built campaignPacket or prompt context
+* thread selection policy lives outside `campaignPacketBuilder`
+* `campaignPacketBuilder` only assembles prepared thread context
+* frontend still sends only `{ playerAction }`
+* successful LLM generation still works
+* failed validation behavior remains unchanged
+* successful commit behavior remains unchanged
+* Chronicle behavior is preserved
+* rollback behavior is preserved
+* no thread JSON files are created, edited, deleted, or migrated
+* no legacy paths are removed
+* no unrelated cleanup or refactor is performed
+
+## Manual Verification
+
+After implementation:
+
+1. Run `npm start`.
+2. Open `http://127.0.0.1:5177/`.
+3. Submit a normal player action.
+4. Confirm browser Network payload still sends only `{ playerAction }`.
+5. Confirm terminal logs show thread context selected/skipped counts.
+6. Confirm scene prose renders.
+7. Confirm three choices render.
+8. Confirm Chronicle updates after successful commit.
+9. Confirm rollback still works.
+10. Confirm no thread JSON files were modified by implementation.
+11. Confirm no legacy route was removed or rewritten.
+
+## Expected Codex Report
+
+Report:
+
+* files inspected
+* files changed
+* actual thread loading path found
+* actual thread field names found
+* where Thread Context Controller v0 was implemented
+* how malformed threads are handled
+* how open threads are selected
+* what cap is applied
+* where Open Threads context is inserted
+* whether packet shape changed
+* whether frontend still sends only `{ playerAction }`
+* whether thread files were mutated
+* whether legacy paths were touched
+* whether `TECHNICAL_DEBT.md` was updated
+* how manual verification should be performed
