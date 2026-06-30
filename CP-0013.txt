@@ -1,0 +1,805 @@
+# CP-0013 — Deprecate Legacy Enforcement And Add Scoped Enforcement v0
+
+## Status
+
+Ready for Codex implementation.
+
+## Development Pass
+
+PASS 3 — Server-side Campaign Context Retrieval
+
+## Objective
+
+Deprecate the existing Bannerlord-shaped Enforcement model without deleting it, and introduce a clean core Enforcement v0 model for scoped laws, customs, obligations, and restrictions.
+
+Enforcement v0 must establish the extension point for scoped normative campaign truth:
+
+```text
+Chronicle records what happened.
+Enforcement records what must now be respected.
+```
+
+Clean Enforcement v0 records must support two separate surfaces:
+
+* a clean Enforcement API/feed projection named `enforcementRecords`
+* LLM prose context as binding constraints
+
+These surfaces have different selection rules.
+
+`enforcementRecords` is the second-Chronicle-style normative feed. It should contain all clean v0 Enforcement records, including active, resolved, and retired records, regardless of whether their scopes match the current active scope set.
+
+LLM binding constraints are prose-control context. They should contain only clean v0 records that are `status: "active"` and whose typed scopes exactly match the current active scope set.
+
+Frontend rendering may be added only if it is safe without broad frontend refactor.
+
+## Core Product Definition
+
+Enforcement records are scoped campaign consequences that future prose must respect when applicable.
+
+They are not merely importance weights.
+
+They are not just Chronicle events.
+
+They are not automatically global.
+
+They apply to prose only when their typed scopes exactly match the current active scope set.
+
+## Current Legacy Situation
+
+The current `campaign/enforcement/*.json` records are Bannerlord-shaped manual synchronization records.
+
+Legacy examples include fields such as:
+
+* `suggestedBannerlordAction`
+* `bannerlordActionTaken`
+* string-only `authority`
+
+These are deprecated legacy/module-specific fields.
+
+They must not define the new core Enforcement schema.
+
+## Hard Rule: Deprecate, Do Not Delete
+
+Do not delete:
+
+* `campaign/enforcement/`
+* existing enforcement JSON records
+* existing `pendingEnforcement` API compatibility
+* rollback handling for enforcement
+* legacy `/api/turn` enforcement behavior
+* legacy `src/context.js` or `src/html.js` enforcement behavior
+
+Do not migrate or rewrite existing legacy enforcement records.
+
+Existing Bannerlord-shaped enforcement records must be preserved and safely skipped or quarantined by the new clean v0 path.
+
+## Required Investigation Before Implementation
+
+Before changing behavior, inspect the actual current code paths for Enforcement.
+
+Specifically inspect:
+
+* `src/store.js`
+* `src/server.js`
+* `src/campaignPacketBuilder.js`
+* `public/app.js`
+* `src/context.js`
+* `src/html.js`
+* `src/engine.js`
+* any current enforcement rendering or summary logic
+
+Report:
+
+* where `campaign.enforcement` is loaded
+* where `pendingEnforcement` is currently built
+* how the current UI renders enforcement
+* whether any current code assumes `requiredAction` and `reason`
+* whether any active scope source already exists
+* whether `campaign.state.activeScopes` already exists
+
+Do not assume field names. Inspect the actual committed/rendered field names before implementing.
+
+## Clean Enforcement v0 Schema
+
+A clean Enforcement v0 record must match one of the accepted v0 record types.
+
+### Law Example
+
+```json
+{
+  "id": "enforce_wergild_law",
+  "type": "law",
+  "status": "active",
+  "scopes": [
+    {
+      "type": "organization",
+      "id": "org_al_sahir"
+    }
+  ],
+  "statement": "Wergild is paid first to kin, then to battle-brothers if no kin exist. The clan takes no share.",
+  "createdAt": "Summer 10, 1084"
+}
+```
+
+### Custom Example
+
+```json
+{
+  "id": "enforce_empty_cushion_custom",
+  "type": "custom",
+  "status": "active",
+  "scopes": [
+    {
+      "type": "household",
+      "id": "household_al_sahir"
+    }
+  ],
+  "statement": "On the first night of each season, the household sets bread and drink for the absent and names one hope.",
+  "createdAt": "Winter 2, 1085"
+}
+```
+
+### Obligation Example
+
+```json
+{
+  "id": "enforce_manteos_fine",
+  "type": "obligation",
+  "status": "resolved",
+  "scopes": [
+    {
+      "type": "organization",
+      "id": "org_player_clan"
+    }
+  ],
+  "requiredAction": "Resolve Lord Manteos' demanded 5,000 denar fine.",
+  "reason": "Manteos claims the clan recruited from villages under his protection without permission.",
+  "resolution": "The player paid the fine and acknowledged his authority over recruitment in protected villages.",
+  "createdAt": "Morning, Summer 1, 1085",
+  "resolvedAt": "Midday, Summer 1, 1085"
+}
+```
+
+## Required v0 Fields
+
+Required for all clean v0 records:
+
+* `id`: non-empty string
+* `type`: non-empty string
+* `status`: non-empty string
+* `scopes`: non-empty array of typed scope references
+* `createdAt`: non-empty string
+
+Each scope must have:
+
+* `type`: non-empty string
+* `id`: non-empty string
+
+Initial accepted `type` values:
+
+* `law`
+* `custom`
+* `obligation`
+* `restriction`
+
+Initial accepted `status` values:
+
+* `active`
+* `resolved`
+* `retired`
+
+Use `retired` for clean in-world rules/customs that no longer apply.
+
+Use “deprecated legacy” only for old Bannerlord-shaped records that do not match the clean v0 schema.
+
+## Type-Specific Content Rules
+
+For `type: "law"`:
+
+* require `statement`
+* do not require `requiredAction`
+
+For `type: "custom"`:
+
+* require `statement`
+* do not require `requiredAction`
+
+For `type: "restriction"`:
+
+* require `statement`
+* do not require `requiredAction`
+
+For `type: "obligation"`:
+
+* require `requiredAction`
+* `reason` is optional but should be supported
+* `resolution` and `resolvedAt` are optional and only meaningful for resolved obligations
+
+Do not allow a law/custom/restriction to be considered clean v0 if it only has `requiredAction`.
+
+Do not allow an obligation to be considered clean v0 if it lacks `requiredAction`.
+
+Only `status: "active"` records may affect LLM prose context as binding constraints.
+
+Resolved and retired records may be returned for the clean Enforcement API/feed projection, but they must not be treated as active constraints.
+
+## Unknown Extra Fields Policy
+
+Unknown extra fields on otherwise clean v0 records should not make the record invalid, unless they are known deprecated Bannerlord legacy fields such as:
+
+* `suggestedBannerlordAction`
+* `bannerlordActionTaken`
+
+Unknown extra fields must not be inserted into LLM context.
+
+Unknown extra fields must not be exposed as core UI/API fields.
+
+This allows future fields such as `sourceEventId` without breaking v0, while still preventing deprecated Bannerlord fields from silently becoming core schema.
+
+## Authority Modeling Is Deferred
+
+Do not add:
+
+* `authorityRef`
+* authority hierarchy
+* authority validation
+* authority-to-scope matching
+* issuer modeling
+* legal precedence rules
+
+Authority/source modeling is deferred to a later task.
+
+Do not preserve legacy string `authority` as a clean v0 core field.
+
+## Deprecated Legacy Record Rule
+
+A record is deprecated legacy if it does not satisfy the clean v0 schema.
+
+A record should also be treated as deprecated legacy if it is shaped around old Bannerlord-specific fields such as:
+
+* `suggestedBannerlordAction`
+* `bannerlordActionTaken`
+
+Deprecated legacy records:
+
+* must not be deleted
+* must not be migrated
+* must not be rewritten
+* must not be adapted into clean v0 records
+* must not enter LLM context as binding constraints
+* must not expose Bannerlord-specific fields as core product fields
+* should be counted/logged as deprecated or skipped after successful JSON parsing
+
+Do not build a compatibility adapter that maps old Bannerlord fields into the clean v0 model.
+
+## JSON Loading Rule
+
+Do not change enforcement loading to lenient JSON parsing in this task unless investigation proves there is already a safe established enforcement-specific pattern.
+
+If malformed enforcement JSON currently fails through `store.js`, preserve that behavior and report it.
+
+Do not introduce runtime placeholder enforcement records.
+
+Do not create a path where malformed enforcement placeholders can be written back during snapshot restore.
+
+Count parsed-but-invalid clean v0 records as invalid/deprecated.
+
+Do not promise malformed JSON counting unless malformed JSON can already be reached safely without changing the persistence contract.
+
+## Active Scope Source
+
+Implement the smallest possible active-scope source.
+
+Preferred v0 source:
+
+```json
+{
+  "activeScopes": [
+    {
+      "type": "actor",
+      "id": "actor_dawud_al_sahir"
+    },
+    {
+      "type": "organization",
+      "id": "org_al_sahir"
+    },
+    {
+      "type": "household",
+      "id": "household_al_sahir"
+    }
+  ]
+}
+```
+
+Read this from `campaign.state.activeScopes` if present.
+
+Do not edit `campaign/state.json` to add `activeScopes` in this task.
+
+The controller must support `campaign.state.activeScopes` if present.
+
+If `campaign.state.activeScopes` is absent, use only this runtime active scope:
+
+```json
+{
+  "type": "global",
+  "id": "campaign"
+}
+```
+
+The global scope exists only so records explicitly scoped to `{ "type": "global", "id": "campaign" }` can apply globally.
+
+Verification of non-global matching may use temporary in-memory/controller fixtures, not committed campaign data.
+
+Do not infer active scopes from:
+
+* actor names
+* clan strings
+* faction strings
+* Bannerlord culture
+* current location text
+* prose
+* thread summaries
+* message text
+* legacy enforcement authority strings
+
+Do not add an organization system.
+
+Do not add hierarchy.
+
+Do not decide that a realm contains a clan, a clan contains an actor, or a household belongs to an organization.
+
+Exact matching only.
+
+## Matching Rule
+
+A clean Enforcement v0 record applies to LLM prose context when:
+
+```text
+record.status === "active"
+AND
+at least one record.scopes item exactly matches one active scope item by both type and id
+```
+
+Example match:
+
+```json
+{
+  "recordScopes": [
+    {
+      "type": "organization",
+      "id": "org_al_sahir"
+    }
+  ],
+  "activeScopes": [
+    {
+      "type": "organization",
+      "id": "org_al_sahir"
+    }
+  ]
+}
+```
+
+Example non-match:
+
+```json
+{
+  "recordScopes": [
+    {
+      "type": "realm",
+      "id": "realm_khuzait"
+    }
+  ],
+  "activeScopes": [
+    {
+      "type": "organization",
+      "id": "org_al_sahir"
+    }
+  ]
+}
+```
+
+This does not match in v0.
+
+Do not build:
+
+* realm-to-organization matching
+* organization-to-actor matching
+* location hierarchy
+* authority hierarchy
+* weighting
+* scoring
+* inheritance
+* fuzzy matching
+
+## Feed Projection Versus LLM Context
+
+Do not treat `enforcementRecords` and LLM binding constraints as the same selection.
+
+`enforcementRecords`:
+
+* is an API/feed projection
+* is intended as the future second-Chronicle-style Enforcement feed
+* may include all clean v0 records regardless of active scope
+* may include active, resolved, and retired clean v0 records
+* must not include deprecated legacy records
+* must not include malformed/invalid records
+* must not expose deprecated Bannerlord fields
+* must not expose unknown extra fields as core API fields
+
+LLM binding constraints:
+
+* are prose-control context
+* must include only clean v0 records with `status: "active"`
+* must include only records whose scopes exactly match the current active scope set
+* must not include resolved records
+* must not include retired records
+* must not include nonmatching active records
+* must not include deprecated legacy records
+
+In short:
+
+Feed projection answers:
+
+```text
+What enforceable laws, customs, obligations, and restrictions exist in the campaign record?
+```
+
+LLM context answers:
+
+```text
+What active enforceable constraints apply to the current prose scene?
+```
+
+## Implementation Shape
+
+Create a focused controller/helper, likely:
+
+```text
+src/enforcementContextController.js
+```
+
+The exact filename may vary if the project has a clearer existing convention.
+
+The controller should own:
+
+* clean v0 validation
+* deprecated legacy classification
+* active scope extraction
+* exact scope matching
+* compact LLM context formatting
+* clean API/feed projection
+
+`campaignPacketBuilder` should remain the assembler/foreman. It should call the enforcement controller, not own enforcement validation and matching logic directly.
+
+`server.js` should not become the enforcement logic owner.
+
+## LLM Context Behavior
+
+Matching active clean Enforcement v0 records should be inserted into `campaignPacket.context` as compact binding constraints.
+
+Do not insert `enforcementRecords` wholesale into `campaignPacket.context`.
+
+The LLM context must use the enforcement controller's scope-matched active constraint selection, not the feed projection.
+
+Resolved, retired, deprecated legacy, invalid, and nonmatching active records must be excluded from LLM binding constraints even if they appear in the `enforcementRecords` feed projection.
+
+Suggested formatting:
+
+```text
+Binding constraints:
+- [law] Wergild is paid first to kin, then to battle-brothers if no kin exist. The clan takes no share.
+- [custom] On the first night of each season, the household sets bread and drink for the absent and names one hope.
+```
+
+For records using `requiredAction`:
+
+```text
+Binding constraints:
+- [obligation] Resolve Lord Manteos' demanded 5,000 denar fine.
+```
+
+Do not include:
+
+* `suggestedBannerlordAction`
+* `bannerlordActionTaken`
+* legacy raw authority strings
+* JSON blobs
+* internal validation data
+* skipped/deprecated legacy record contents
+* unknown extra fields
+
+Cap selected context records at a small deterministic number, preferably 5.
+
+Use deterministic ordering. Prefer `createdAt` if safely comparable, otherwise stable `id` ordering.
+
+Do not build relevance weighting.
+
+Log something like:
+
+```text
+[campaignPacket] enforcement context: 2 selected, 1 inactive, 1 retired/resolved, 1 deprecated legacy, 0 invalid clean records
+```
+
+Exact wording may vary, but selected/skipped/deprecated counts should be visible.
+
+## API / UI Surface Behavior
+
+The current `/api/chronicle` response already has `pendingEnforcement`.
+
+Preserve `pendingEnforcement` for legacy compatibility.
+
+Do not place clean law/custom/restriction records directly into `pendingEnforcement` unless they are explicitly projected into the old `requiredAction` / `reason` shape.
+
+Required backend approach:
+
+* leave `pendingEnforcement` unchanged for legacy compatibility
+* add a separate clean summary field named `enforcementRecords` unless investigation finds a better existing name
+* `enforcementRecords` is the clean Enforcement feed projection
+* `enforcementRecords` must contain clean v0 records only
+* `enforcementRecords` must include active, resolved, and retired clean v0 records
+* `enforcementRecords` should not be filtered by active scope
+* `enforcementRecords` must not be used as the LLM context selection directly
+* `enforcementRecords` must not include deprecated legacy records
+* `enforcementRecords` must not expose Bannerlord-specific legacy fields
+* frontend rendering may be skipped if unsafe without broader refactor, but the backend projection must exist
+
+The clean backend projection should include compact player-facing fields only, such as:
+
+* `id`
+* `type`
+* `status`
+* `scopes`
+* `statement` or `requiredAction`
+* `reason` if present
+* `createdAt`
+* `resolvedAt` if present
+* `resolution` if present
+
+Do not expose unknown extra fields through the clean projection.
+
+Do not display Bannerlord-specific legacy fields as core product fields.
+
+If clean Enforcement UI rendering is safe, update `public/app.js` narrowly so the existing Enforcement UI area can display `enforcementRecords`.
+
+If clean Enforcement UI rendering is not safe without broader frontend changes, preserve current UI behavior and report that frontend rendering was deferred.
+
+Do not force a frontend refactor.
+
+Do not create a full CRUD UI.
+
+Do not create an enforcement manager.
+
+Do not create resolution buttons.
+
+Do not mutate enforcement records from the UI.
+
+## Storage Rules
+
+Read `campaign/enforcement/*.json`.
+
+Do not directly write, migrate, rewrite, delete, or create enforcement records as part of this task.
+
+Do not create placeholder enforcement files.
+
+Do not seed new campaign data unless explicitly necessary for a temporary test fixture. Temporary test data must not be committed as live campaign data.
+
+Rollback behavior must remain intact.
+
+Existing rollback behavior may clear and rewrite `campaign/enforcement/*.json` during rollback verification. If that happens, report it as pre-existing rollback behavior, not new Enforcement v0 behavior.
+
+## Out Of Scope
+
+Do not implement:
+
+* enforcement creation from events
+* law creation from player actions
+* custom creation from player actions
+* enforcement resolution workflow
+* external-game synchronization
+* Bannerlord console/manual action workflows
+* treasury deduction logic
+* authority model
+* authority hierarchy
+* organization hierarchy
+* realm-to-clan matching
+* actor membership matching
+* location containment
+* weighting/scoring
+* CRUD
+* schema migration
+* legacy data deletion
+* legacy adapter
+* full moduleFacts design
+* actor module boundary work
+* organization model
+* database migration
+* broad frontend refactor
+* broad API redesign
+
+Do not touch unrelated legacy behavior.
+
+Do not refactor `server.js` broadly.
+
+Do not refactor `src/engine.js`.
+
+Do not refactor `src/context.js`.
+
+Do not refactor `src/html.js`.
+
+## Documentation Updates
+
+Update docs narrowly.
+
+Required updates:
+
+### `DEV_DATA_SHAPES.md`
+
+* Mark the current Bannerlord-shaped Enforcement shape as deprecated legacy.
+* Document clean Enforcement v0 schema.
+* Document typed scopes.
+* Document exact matching only.
+* Document `active`, `resolved`, and `retired` clean statuses.
+* Document that `suggestedBannerlordAction` and `bannerlordActionTaken` are legacy module-specific fields.
+* Document unknown extra field policy.
+* Document the difference between full clean feed projection and scope-matched LLM constraints.
+
+### `DEV_API_CONTRACTS.md`
+
+* Document `/api/chronicle.enforcementRecords`.
+* Document that `enforcementRecords` contains clean v0 records only.
+* Document that `enforcementRecords` is a clean feed projection and should not be active-scope filtered.
+* Preserve and document `pendingEnforcement` compatibility.
+* Document that LLM generation now reads clean matching active Enforcement v0 records for context.
+* Document that LLM context does not insert `enforcementRecords` wholesale.
+
+### `DEV_ARCHITECTURE.md`
+
+* Document any new enforcement controller/helper.
+* Document that Enforcement v0 is a scoped normative-record context source.
+* Document that the controller owns both clean feed projection and matched active constraint selection, but these are separate outputs.
+
+### `TECHNICAL_DEBT.md`
+
+Add a debt item for deprecated Bannerlord-shaped enforcement records.
+
+Mention:
+
+* `suggestedBannerlordAction`
+* `bannerlordActionTaken`
+* legacy string `authority`
+* deletion/migration is deferred until clean Enforcement v0 is proven and legacy usage is audited
+
+Do not turn documentation updates into broad refactors.
+
+## Acceptance Criteria
+
+Complete only when:
+
+* legacy Bannerlord-shaped enforcement records are preserved
+* the implementation does not directly delete, migrate, rewrite, or seed enforcement files
+* existing rollback behavior remains intact
+* any enforcement rewrites caused by rollback verification are reported as pre-existing rollback behavior
+* enforcement JSON loading behavior is not made lenient unless already safely supported
+* no malformed enforcement placeholder write path is introduced
+* clean Enforcement v0 validation exists
+* typed `scopes[]` are required for clean v0 records
+* clean v0 records require `id`, `type`, `status`, `createdAt`, `scopes[]`
+* law/custom/restriction records require `statement`
+* obligation records require `requiredAction`
+* accepted clean statuses are `active`, `resolved`, and `retired`
+* unknown extra fields are tolerated on otherwise clean v0 records, except known deprecated Bannerlord fields
+* unknown extra fields do not enter LLM context
+* unknown extra fields do not enter the clean API/feed projection
+* deprecated legacy records are skipped/quarantined by the clean v0 path
+* `suggestedBannerlordAction` and `bannerlordActionTaken` do not become core fields
+* legacy string `authority` does not become a clean v0 core field
+* no authority model is added
+* active scope extraction exists
+* `campaign.state.activeScopes` is used if present
+* `campaign/state.json` is not edited to add `activeScopes`
+* runtime global campaign scope is supported
+* no scope inference from Bannerlord fields, names, prose, clans, factions, or locations occurs
+* exact typed-scope matching exists
+* matching active clean records enter `campaignPacket.context` as compact binding constraints
+* nonmatching clean records do not enter LLM context
+* resolved/retired records do not enter LLM context as active constraints
+* existing frontend request contract remains `{ playerAction }`
+* `/api/chronicle` still works
+* existing `pendingEnforcement` compatibility is not broken
+* clean records are not blindly inserted into `pendingEnforcement`
+* `enforcementRecords` or a clearly justified equivalent clean backend projection exists
+* `enforcementRecords` is treated as a feed projection, not as the LLM context source
+* `enforcementRecords` contains clean v0 records only
+* `enforcementRecords` includes clean v0 records regardless of active scope
+* `enforcementRecords` may include active, resolved, and retired clean v0 records
+* deprecated legacy records do not appear in `enforcementRecords`
+* LLM context uses only the scope-matched active constraint selection
+* LLM context does not insert `enforcementRecords` wholesale
+* resolved clean records may appear in `enforcementRecords` but do not enter LLM binding constraints
+* retired clean records may appear in `enforcementRecords` but do not enter LLM binding constraints
+* nonmatching active clean records may appear in `enforcementRecords` but do not enter LLM binding constraints
+* existing Enforcement UI area displays clean v0 records only if safe without broad refactor
+* legacy `/api/turn` is not refactored
+* `src/engine.js` is not refactored
+* `src/context.js` is not refactored
+* `src/html.js` is not refactored
+* docs are updated narrowly
+* technical debt is updated narrowly
+
+## Verification
+
+Run syntax checks for changed JavaScript files.
+
+Verify without relying on a live LLM call where possible.
+
+Suggested verification steps:
+
+1. Start from existing campaign data.
+2. Confirm app starts.
+3. Confirm `GET /api/chronicle` still returns a valid summary.
+4. Confirm existing `pendingEnforcement` behavior is preserved.
+5. Confirm `GET /api/chronicle` includes `enforcementRecords` or a clearly justified equivalent clean backend projection.
+6. Confirm `enforcementRecords` contains clean v0 records only.
+7. Confirm deprecated legacy Bannerlord-shaped enforcement records do not appear in `enforcementRecords`.
+8. Confirm legacy Bannerlord-shaped enforcement records are counted/skipped/deprecated by the new clean v0 path.
+9. Confirm malformed enforcement JSON behavior is unchanged from before this task.
+10. Temporarily test a clean active Enforcement v0 record with a matching scope using a safe fixture or temporary in-memory/controller test.
+11. Confirm matching clean record appears in the built campaign packet context as a binding constraint.
+12. Temporarily test a clean active Enforcement v0 record with a nonmatching scope.
+13. Confirm `enforcementRecords` includes a clean nonmatching active record if one exists in the clean test fixture.
+14. Confirm that same nonmatching active record does not enter `campaignPacket.context`.
+15. Confirm `enforcementRecords` includes clean resolved/retired records if they exist in the clean test fixture.
+16. Confirm those resolved/retired records do not enter `campaignPacket.context`.
+17. Confirm `campaignPacket.context` is built from the controller's matched active constraints, not by dumping `enforcementRecords`.
+18. Confirm no Bannerlord-specific fields appear in LLM context or clean API/feed projection.
+19. Confirm unknown extra fields on otherwise clean v0 records do not enter LLM context or clean API/feed projection.
+20. Confirm frontend still sends only `{ playerAction }`.
+21. Confirm a normal action still reaches packet construction.
+22. Confirm rollback still works after a valid committed turn.
+23. If rollback rewrites enforcement files during verification, report that as pre-existing rollback behavior.
+24. Confirm the implementation itself did not directly delete, migrate, rewrite, or permanently seed enforcement files.
+25. Confirm `campaign/state.json` was not edited to add `activeScopes`.
+
+## Final Report Required From Codex
+
+Report:
+
+* files changed
+* current enforcement usage findings
+* whether `campaign.state.activeScopes` already existed
+* how active scopes are extracted
+* whether `campaign/state.json` was changed
+* final clean Enforcement v0 schema
+* validation rules
+* accepted `type` values
+* accepted `status` values
+* unknown extra fields policy
+* exact matching rule
+* where matching records are inserted into LLM context
+* whether `enforcementRecords` is scope-filtered or full clean-feed projection
+* how the LLM matched active constraint selection differs from `enforcementRecords`
+* confirmation that `enforcementRecords` is not inserted wholesale into `campaignPacket.context`
+* whether UI rendering was updated
+* whether `enforcementRecords` or equivalent clean API/feed projection was added
+* whether `pendingEnforcement` compatibility was preserved
+* how deprecated legacy records are detected
+* how deprecated/invalid/skipped counts are logged
+* whether JSON loading behavior changed
+* whether any campaign data changed
+* whether the implementation directly created/deleted/rewrote enforcement files
+* whether rollback rewrote enforcement files only as pre-existing rollback behavior
+* whether rollback still works
+* whether frontend contract changed
+* docs updated
+* technical debt updated
+* any risks or follow-up debt
+
+## Final Reminder
+
+This task establishes the Enforcement extension point.
+
+Do not build the full enforcement system.
+
+Do not solve authority, hierarchy, organization membership, law creation, resolution, or external sync.
+
+The goal is a safe, scoped, clean v0 model beside deprecated legacy data.
